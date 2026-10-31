@@ -194,4 +194,31 @@ class AuthServiceTest {
         assertThatThrownBy(() -> authService.validate(request))
                 .isInstanceOf(InvalidTokenException.class);
     }
+
+    @Test
+    void delete_shouldDeleteUser_whenAccessTokenIsValid() {
+        Claims claims = Jwts.claims().subject("1").add(JwtService.TYPE_CLAIM, JwtService.ACCESS_TOKEN_TYPE).build();
+        when(jwtService.parseClaims("access-token")).thenReturn(claims);
+
+        authService.delete("Bearer access-token");
+
+        verify(userCredentialsRepository).deleteById(1L);
+    }
+
+    @Test
+    void delete_shouldThrow_whenHeaderHasNoBearerPrefix() {
+        assertThatThrownBy(() -> authService.delete("access-token"))
+                .isInstanceOf(InvalidTokenException.class);
+        verify(userCredentialsRepository, never()).deleteById(any());
+    }
+
+    @Test
+    void delete_shouldThrow_whenRefreshTokenIsUsed() {
+        Claims claims = Jwts.claims().subject("1").add(JwtService.TYPE_CLAIM, JwtService.REFRESH_TOKEN_TYPE).build();
+        when(jwtService.parseClaims("refresh-token")).thenReturn(claims);
+
+        assertThatThrownBy(() -> authService.delete("Bearer refresh-token"))
+                .isInstanceOf(InvalidTokenException.class);
+        verify(userCredentialsRepository, never()).deleteById(any());
+    }
 }
