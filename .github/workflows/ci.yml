@@ -23,16 +23,16 @@ jobs:
           cache: maven
 
       - name: Build
-        run: ./mvnw -B clean compile
+        run: mvn -B clean compile
 
       - name: Test
-        run: ./mvnw -B verify
+        run: mvn -B verify
 
       - name: Code analysis (SonarCloud)
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         run: >
-          ./mvnw -B org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
+          mvn -B org.sonarsource.scanner.maven:sonar-maven-plugin:sonar
           -Dsonar.host.url=https://sonarcloud.io
           -Dsonar.organization=nikitarudolf
           -Dsonar.projectKey=nikitarudolf_auth-service
