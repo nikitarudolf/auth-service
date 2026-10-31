@@ -9,10 +9,13 @@ import com.innowise.auth_service.dto.ValidateResponse;
 import com.innowise.auth_service.service.AuthService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
@@ -41,5 +44,11 @@ public class AuthController {
     @PostMapping("/validate")
     public ResponseEntity<ValidateResponse> validate(@Valid @RequestBody TokenRequest request) {
         return ResponseEntity.ok(authService.validate(request));
+    }
+
+    @DeleteMapping("/credentials")
+    public ResponseEntity<Void> delete(@RequestHeader(HttpHeaders.AUTHORIZATION) String authorization) {
+        authService.delete(authorization);
+        return ResponseEntity.noContent().build();
     }
 }

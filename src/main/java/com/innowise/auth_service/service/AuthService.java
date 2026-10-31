@@ -28,6 +28,7 @@ public class AuthService {
 
     private static final String INVALID_CREDENTIALS_MESSAGE = "Invalid email or password";
     private static final String INVALID_TOKEN_MESSAGE = "Invalid or expired token";
+    private static final String BEARER_PREFIX = "Bearer ";
 
     private final UserCredentialsRepository userCredentialsRepository;
     private final UserCredentialsMapper userCredentialsMapper;
@@ -66,6 +67,16 @@ public class AuthService {
         return new ValidateResponse(
                 Long.valueOf(claims.getSubject()),
                 Role.valueOf(claims.get(JwtService.ROLE_CLAIM, String.class)));
+    }
+
+    @Transactional
+    public void delete(String authorizationHeader) {
+        if (!authorizationHeader.startsWith(BEARER_PREFIX)) {
+            throw new InvalidTokenException(INVALID_TOKEN_MESSAGE);
+        }
+        String token = authorizationHeader.substring(BEARER_PREFIX.length());
+        Claims claims = parseToken(token, JwtService.ACCESS_TOKEN_TYPE);
+        userCredentialsRepository.deleteById(Long.valueOf(claims.getSubject()));
     }
 
     private Claims parseToken(String token, String expectedType) {
