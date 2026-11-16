@@ -4,12 +4,12 @@ import com.innowise.auth_service.dto.LoginRequest;
 import com.innowise.auth_service.dto.RegisterRequest;
 import com.innowise.auth_service.dto.TokenRequest;
 import com.innowise.auth_service.dto.TokenResponse;
-import com.innowise.auth_service.dto.UserCredentialsResponse;
 import com.innowise.auth_service.dto.ValidateResponse;
 import com.innowise.auth_service.entity.Role;
 import com.innowise.auth_service.entity.UserCredentials;
 import com.innowise.auth_service.exception.InvalidCredentialsException;
 import com.innowise.auth_service.exception.InvalidTokenException;
+import com.innowise.auth_service.exception.OperationNotAllowedException;
 import com.innowise.auth_service.exception.ResourceAlreadyExistsException;
 import com.innowise.auth_service.mapper.UserCredentialsMapper;
 import com.innowise.auth_service.repository.UserCredentialsRepository;
@@ -28,6 +28,7 @@ public class AuthService {
 
     private static final String INVALID_CREDENTIALS_MESSAGE = "Invalid email or password";
     private static final String INVALID_TOKEN_MESSAGE = "Invalid or expired token";
+    private static final String BEARER_PREFIX = "Bearer ";
 
     private final UserCredentialsRepository userCredentialsRepository;
     private final UserCredentialsMapper userCredentialsMapper;
@@ -35,14 +36,14 @@ public class AuthService {
     private final JwtService jwtService;
 
     @Transactional
-    public UserCredentialsResponse register(RegisterRequest request) {
+    public TokenResponse register(RegisterRequest request) {
         if (userCredentialsRepository.existsByEmail(request.email())) {
             throw new ResourceAlreadyExistsException("User with email " + request.email() + " already exists");
         }
         UserCredentials user = userCredentialsMapper.toEntity(request);
         user.setPasswordHash(passwordEncoder.encode(request.password()));
         user.setRole(Role.USER);
-        return userCredentialsMapper.toResponse(userCredentialsRepository.save(user));
+        return createTokens(userCredentialsRepository.save(user));
     }
 
     public TokenResponse login(LoginRequest request) {
@@ -66,6 +67,19 @@ public class AuthService {
         return new ValidateResponse(
                 Long.valueOf(claims.getSubject()),
                 Role.valueOf(claims.get(JwtService.ROLE_CLAIM, String.class)));
+    }
+
+    @Transactional
+    public void delete(String authorizationHeader) {
+        if (!authorizationHeader.startsWith(BEARER_PREFIX)) {
+            throw new InvalidTokenException(INVALID_TOKEN_MESSAGE);
+        }
+        String token = authorizationHeader.substring(BEARER_PREFIX.length());
+        Claims claims = parseToken(token, JwtService.ACCESS_TOKEN_TYPE);
+        if (Role.ADMIN.name().equals(claims.get(JwtService.ROLE_CLAIM, String.class))) {
+            throw new OperationNotAllowedException("Admin account cannot be deleted");
+        }
+        userCredentialsRepository.deleteById(Long.valueOf(claims.getSubject()));
     }
 
     private Claims parseToken(String token, String expectedType) {

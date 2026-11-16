@@ -4,12 +4,12 @@ import com.innowise.auth_service.dto.LoginRequest;
 import com.innowise.auth_service.dto.RegisterRequest;
 import com.innowise.auth_service.dto.TokenRequest;
 import com.innowise.auth_service.dto.TokenResponse;
-import com.innowise.auth_service.dto.UserCredentialsResponse;
 import com.innowise.auth_service.dto.ValidateResponse;
 import com.innowise.auth_service.entity.Role;
 import com.innowise.auth_service.entity.UserCredentials;
 import com.innowise.auth_service.exception.InvalidCredentialsException;
 import com.innowise.auth_service.exception.InvalidTokenException;
+import com.innowise.auth_service.exception.OperationNotAllowedException;
 import com.innowise.auth_service.exception.ResourceAlreadyExistsException;
 import com.innowise.auth_service.mapper.UserCredentialsMapper;
 import com.innowise.auth_service.repository.UserCredentialsRepository;
@@ -68,19 +68,19 @@ class AuthServiceTest {
     }
 
     @Test
-    void register_shouldSaveUserWithHashedPasswordAndUserRole() {
+    void register_shouldSaveUserAndReturnTokens() {
         RegisterRequest request = new RegisterRequest(EMAIL, PASSWORD);
         UserCredentials newUser = new UserCredentials();
-        UserCredentialsResponse response = new UserCredentialsResponse(1L, EMAIL, Role.USER, null);
         when(userCredentialsRepository.existsByEmail(EMAIL)).thenReturn(false);
         when(userCredentialsMapper.toEntity(request)).thenReturn(newUser);
         when(passwordEncoder.encode(PASSWORD)).thenReturn(PASSWORD_HASH);
         when(userCredentialsRepository.save(newUser)).thenReturn(newUser);
-        when(userCredentialsMapper.toResponse(newUser)).thenReturn(response);
+        when(jwtService.generateAccessToken(newUser)).thenReturn("access-token");
+        when(jwtService.generateRefreshToken(newUser)).thenReturn("refresh-token");
 
-        UserCredentialsResponse result = authService.register(request);
+        TokenResponse result = authService.register(request);
 
-        assertThat(result).isEqualTo(response);
+        assertThat(result).isEqualTo(new TokenResponse("access-token", "refresh-token"));
         assertThat(newUser.getPasswordHash()).isEqualTo(PASSWORD_HASH);
         assertThat(newUser.getRole()).isEqualTo(Role.USER);
     }
@@ -93,6 +93,7 @@ class AuthServiceTest {
         assertThatThrownBy(() -> authService.register(request))
                 .isInstanceOf(ResourceAlreadyExistsException.class);
         verify(userCredentialsRepository, never()).save(any());
+        verify(jwtService, never()).generateAccessToken(any());
     }
 
     @Test
@@ -193,5 +194,57 @@ class AuthServiceTest {
 
         assertThatThrownBy(() -> authService.validate(request))
                 .isInstanceOf(InvalidTokenException.class);
+    }
+
+    @Test
+    void delete_shouldDeleteUser_whenAccessTokenIsValid() {
+        when(jwtService.parseClaims("access-token")).thenReturn(accessClaims(Role.USER));
+
+        authService.delete("Bearer access-token");
+
+        verify(userCredentialsRepository).deleteById(1L);
+    }
+
+    @Test
+    void delete_shouldThrow_whenUserIsAdmin() {
+        when(jwtService.parseClaims("access-token")).thenReturn(accessClaims(Role.ADMIN));
+
+        assertThatThrownBy(() -> authService.delete("Bearer access-token"))
+                .isInstanceOf(OperationNotAllowedException.class);
+        verify(userCredentialsRepository, never()).deleteById(any());
+    }
+
+    @Test
+    void delete_shouldThrow_whenTokenIsInvalid() {
+        when(jwtService.parseClaims("bad-token")).thenThrow(new JwtException("Invalid token"));
+
+        assertThatThrownBy(() -> authService.delete("Bearer bad-token"))
+                .isInstanceOf(InvalidTokenException.class);
+        verify(userCredentialsRepository, never()).deleteById(any());
+    }
+
+    @Test
+    void delete_shouldThrow_whenHeaderHasNoBearerPrefix() {
+        assertThatThrownBy(() -> authService.delete("access-token"))
+                .isInstanceOf(InvalidTokenException.class);
+        verify(userCredentialsRepository, never()).deleteById(any());
+    }
+
+    @Test
+    void delete_shouldThrow_whenRefreshTokenIsUsed() {
+        Claims claims = Jwts.claims().subject("1").add(JwtService.TYPE_CLAIM, JwtService.REFRESH_TOKEN_TYPE).build();
+        when(jwtService.parseClaims("refresh-token")).thenReturn(claims);
+
+        assertThatThrownBy(() -> authService.delete("Bearer refresh-token"))
+                .isInstanceOf(InvalidTokenException.class);
+        verify(userCredentialsRepository, never()).deleteById(any());
+    }
+
+    private Claims accessClaims(Role role) {
+        return Jwts.claims()
+                .subject("1")
+                .add(JwtService.ROLE_CLAIM, role.name())
+                .add(JwtService.TYPE_CLAIM, JwtService.ACCESS_TOKEN_TYPE)
+                .build();
     }
 }

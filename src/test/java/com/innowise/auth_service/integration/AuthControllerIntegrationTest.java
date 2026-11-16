@@ -14,12 +14,14 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.autoconfigure.web.servlet.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.MockMvc;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -52,20 +54,38 @@ class AuthControllerIntegrationTest {
     }
 
     @Test
-    void register_shouldReturn201AndStoreHashedPassword() throws Exception {
+    void register_shouldReturn201WithTokensAndStoreHashedPassword() throws Exception {
         mockMvc.perform(post("/api/v1/auth/register")
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new RegisterRequest(EMAIL, PASSWORD))))
                 .andExpect(status().isCreated())
-                .andExpect(jsonPath("$.id").isNumber())
-                .andExpect(jsonPath("$.email").value(EMAIL))
-                .andExpect(jsonPath("$.role").value("USER"))
+                .andExpect(jsonPath("$.accessToken").isString())
+                .andExpect(jsonPath("$.refreshToken").isString())
                 .andExpect(jsonPath("$.password").doesNotExist())
                 .andExpect(jsonPath("$.passwordHash").doesNotExist());
 
         String passwordHash = jdbcTemplate.queryForObject(
                 "SELECT password_hash FROM user_credentials WHERE email = ?", String.class, EMAIL);
         assertThat(passwordHash).isNotEqualTo(PASSWORD).startsWith("$2");
+    }
+
+    @Test
+    void register_shouldReturnAccessTokenOfCreatedUser() throws Exception {
+        String json = mockMvc.perform(post("/api/v1/auth/register")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new RegisterRequest(EMAIL, PASSWORD))))
+                .andExpect(status().isCreated())
+                .andReturn().getResponse().getContentAsString();
+        TokenResponse tokens = objectMapper.readValue(json, TokenResponse.class);
+        Long userId = jdbcTemplate.queryForObject(
+                "SELECT id FROM user_credentials WHERE email = ?", Long.class, EMAIL);
+
+        mockMvc.perform(post("/api/v1/auth/validate")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new TokenRequest(tokens.accessToken()))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.userId").value(userId))
+                .andExpect(jsonPath("$.role").value("USER"));
     }
 
     @Test
@@ -169,6 +189,49 @@ class AuthControllerIntegrationTest {
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(objectMapper.writeValueAsString(new TokenRequest(tokens.accessToken()))))
                 .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void delete_shouldReturn204AndRemoveCredentials_whenAccessTokenIsValid() throws Exception {
+        register(EMAIL, PASSWORD);
+        TokenResponse tokens = login(EMAIL, PASSWORD);
+
+        mockMvc.perform(delete("/api/v1/auth/credentials")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + tokens.accessToken()))
+                .andExpect(status().isNoContent());
+
+        mockMvc.perform(post("/api/v1/auth/login")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(new LoginRequest(EMAIL, PASSWORD))))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void delete_shouldReturn401_whenRefreshTokenIsUsed() throws Exception {
+        register(EMAIL, PASSWORD);
+        TokenResponse tokens = login(EMAIL, PASSWORD);
+
+        mockMvc.perform(delete("/api/v1/auth/credentials")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + tokens.refreshToken()))
+                .andExpect(status().isUnauthorized());
+    }
+
+    @Test
+    void delete_shouldReturn403AndKeepAdmin_whenUserIsAdmin() throws Exception {
+        TokenResponse tokens = login(adminProperties.email(), adminProperties.password());
+
+        mockMvc.perform(delete("/api/v1/auth/credentials")
+                        .header(HttpHeaders.AUTHORIZATION, "Bearer " + tokens.accessToken()))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.detail").value("Admin account cannot be deleted"));
+
+        login(adminProperties.email(), adminProperties.password());
+    }
+
+    @Test
+    void delete_shouldReturn400_whenAuthorizationHeaderIsMissing() throws Exception {
+        mockMvc.perform(delete("/api/v1/auth/credentials"))
+                .andExpect(status().isBadRequest());
     }
 
     @Test
